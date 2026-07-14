@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Video Player with Subtitles</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --container-bg: #1e293b;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --danger-color: #ef4444;
+            --danger-hover: #dc2626;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+
+            /* Dynamic subtitle styling variables controlled by JS */
+            --subtitle-font-size: 1.2rem;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background-color: var(--container-bg);
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            padding: 24px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .upload-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 640px) {
+            .upload-section {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border-color);
+            border-radius: 8px;
+            padding: 24px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background-color: rgba(255, 255, 255, 0.02);
+            position: relative;
+        }
+
+        .drop-zone:hover, .drop-zone.drag-over {
+            border-color: var(--accent-color);
+            background-color: rgba(59, 130, 246, 0.05);
+        }
+
+        .drop-zone span {
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        .drop-zone p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .drop-zone .file-status {
+            margin-top: 8px;
+            font-size: 0.85rem;
+            color: var(--accent-color);
+            font-weight: 500;
+            word-break: break-all;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        /* Controls / Configuration Section */
+        .controls-panel {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .config-group {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .config-item label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+        }
+
+        /* Fixed Alignment for Slider and Value elements */
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .config-item input[type="range"] {
+            width: 140px;
+            accent-color: var(--accent-color);
+            cursor: pointer;
+            height: 6px;
+            border-radius: 3px;
+        }
+
+        .config-value {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: var(--accent-color);
+            display: inline-block;
+            min-width: 45px;
+        }
+
+        .btn {
+            padding: 10px 18px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .btn-danger {
+            background-color: var(--danger-color);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background-color: var(--danger-hover);
+        }
+
+        .player-wrapper {
+            position: relative;
+            width: 100%;
+            background-color: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            display: none;
+            box-shadow: inset 0 0 40px rgba(0,0,0,0.8);
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* Customizing Subtitle Appearance Natively via WebVTT cues */
+        video::cue {
+            background: rgba(0, 0, 0, 0.75);
+            color: #ffffff;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: var(--subtitle-font-size);
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <header>
+            <h1>Local Video Player</h1>
+            <p>Drag and drop browser-compatible files to play offline.</p>
+            <p style="font-size: 0.85rem; margin-top: 6px; color: var(--accent-color)">
+                Hotkeys: <strong>Space</strong> (Play/Pause) | <strong>&uparrow; / &downarrow; Arrows</strong> (Volume) | <strong>F</strong> (Fullscreen)
+            </p>
+        </header>
+
+        <div class="upload-section">
+            <!-- Video Upload -->
+            <div class="drop-zone" id="video-drop-zone">
+                <span style="font-size: 2.5rem;">🎬</span>
+                <p><strong>Choose a Video</strong> or drag it here</p>
+                <p style="font-size: 0.8rem; margin-top: 4px;">Supports MP4, WebM, OGG, OGV</p>
+                <div class="file-status" id="video-status">No video selected</div>
+                <input type="file" id="video-input" class="file-input" accept="video/mp4, video/webm, video/ogg">
+            </div>
+
+            <!-- Subtitle Upload -->
+            <div class="drop-zone" id="srt-drop-zone">
+                <span style="font-size: 2.5rem;">📝</span>
+                <p><strong>Choose External Subtitles</strong> or drag it here</p>
+                <p style="font-size: 0.8rem; margin-top: 4px;">Supports .srt files</p>
+                <div class="file-status" id="srt-status">No external subtitle file selected</div>
+                <input type="file" id="srt-input" class="file-input" accept=".srt">
+            </div>
+        </div>
+
+        <!-- Configuration & Global Action Controls -->
+        <div class="controls-panel">
+            <div class="config-group">
+                <!-- Font Size Configuration -->
+                <div class="config-item">
+                    <label for="font-size-slider">Font Size</label>
+                    <div class="slider-container">
+                        <input type="range" id="font-size-slider" min="0.8" max="2.5" step="0.1" value="1.2">
+                        <span class="config-value" id="font-size-value">1.2rem</span>
+                    </div>
+                </div>
+
+                <!-- Vertical Position Configuration -->
+                <div class="config-item">
+                    <label for="position-slider">Vertical Position</label>
+                    <div class="slider-container">
+                        <input type="range" id="position-slider" min="10" max="95" step="5" value="85">
+                        <span class="config-value" id="position-value">85%</span>
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn btn-danger" id="clear-btn">Clear All</button>
+        </div>
+
+        <!-- Video Player Wrapper -->
+        <div class="player-wrapper" id="player-wrapper">
+            <video id="video-player" controls preload="metadata">
+                Your browser does not support the video tag.
+            </video>
+        </div>
+    </div>
+
+    <script>
+        const videoInput = document.getElementById('video-input');
+        const videoDropZone = document.getElementById('video-drop-zone');
+        const videoStatus = document.getElementById('video-status');
+
+        const srtInput = document.getElementById('srt-input');
+        const srtDropZone = document.getElementById('srt-drop-zone');
+        const srtStatus = document.getElementById('srt-status');
+
+        const videoPlayer = document.getElementById('video-player');
+        const playerWrapper = document.getElementById('player-wrapper');
+        const clearBtn = document.getElementById('clear-btn');
+
+        // Config Elements
+        const fontSizeSlider = document.getElementById('font-size-slider');
+        const fontSizeValue = document.getElementById('font-size-value');
+        const positionSlider = document.getElementById('position-slider');
+        const positionValue = document.getElementById('position-value');
+
+        let videoFile = null;
+        let srtFile = null;
+        let rawSrtText = ""; // Cache raw string to recalculate parsing on vertical position shift
+        let currentExternalTrack = null;
+
+        // Supported browser mime types and extensions
+        const allowedVideoMimes = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'];
+        const allowedVideoExtensions = ['mp4', 'webm', 'ogg', 'ogv'];
+
+        // Initial setup on load
+        loadSettings();
+
+        // Setup Drag & Drop Listeners
+        setupDragAndDrop(videoDropZone, videoInput, handleVideoSelect);
+        setupDragAndDrop(srtDropZone, srtInput, handleSrtSelect);
+
+        function setupDragAndDrop(zone, input, handler) {
+            zone.addEventListener('click', () => input.click());
+
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                zone.classList.add('drag-over');
+            });
+
+            ['dragleave', 'dragend'].forEach(type => {
+                zone.addEventListener(type, () => zone.classList.remove('drag-over'));
+            });
+
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                zone.classList.remove('drag-over');
+                if (e.dataTransfer.files.length > 0) {
+                    input.files = e.dataTransfer.files;
+                    handler(e.dataTransfer.files[0]);
+                }
+            });
+
+            input.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handler(e.target.files[0]);
+                }
+            });
+        }
+
+        // Handle Video Selection
+        function handleVideoSelect(file) {
+            const fileExtension = file.name.split('.').pop().toLowerCase();
+            const isBrowserCompatible = allowedVideoMimes.includes(file.type) || allowedVideoExtensions.includes(fileExtension);
+
+            if (!isBrowserCompatible) {
+                alert('Please select a compatible browser video format (.mp4, .webm, or .ogg / .ogv).');
+                videoInput.value = "";
+                return;
+            }
+
+            videoFile = file;
+            videoStatus.textContent = file.name;
+
+            // Clear any old track element
+            clearSubtitleTrack();
+
+            // Create object URL and load video
+            const videoURL = URL.createObjectURL(file);
+            videoPlayer.src = videoURL;
+            playerWrapper.style.display = 'block';
+            videoPlayer.load();
+
+            // Handle embedded track defaults
+            videoPlayer.onloadedmetadata = () => {
+                if (videoPlayer.textTracks && videoPlayer.textTracks.length > 0 && !currentExternalTrack) {
+                    videoPlayer.textTracks[0].mode = 'showing';
+                }
+            };
+        }
+
+        // Handle SRT Selection
+        function handleSrtSelect(file) {
+            if (!videoFile) {
+                alert('Please upload a video file first before adding subtitles.');
+                srtInput.value = "";
+                return;
+            }
+            if (!file.name.endsWith('.srt')) {
+                alert('Please select a valid .srt file.');
+                srtInput.value = "";
+                return;
+            }
+            srtFile = file;
+            srtStatus.textContent = file.name;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                rawSrtText = e.target.result;
+                applySubtitles();
+            };
+            reader.readAsText(file);
+        }
+
+        // Process, build, and attach current subtitles
+        function applySubtitles() {
+            if (!rawSrtText) return;
+
+            const position = positionSlider.value;
+            const vttText = convertSrtToVtt(rawSrtText, position);
+
+            // Clear any previous subtitles
+            clearSubtitleTrack();
+
+            // Create a blob URL for the converted VTT data
+            const vttBlob = new Blob([vttText], { type: 'text/vtt' });
+            const vttURL = URL.createObjectURL(vttBlob);
+
+            // Create and append track element
+            currentExternalTrack = document.createElement('track');
+            currentExternalTrack.kind = 'subtitles';
+            currentExternalTrack.label = 'External Subtitles (' + (srtFile ? srtFile.name : 'Loaded') + ')';
+            currentExternalTrack.srclang = 'ext';
+            currentExternalTrack.src = vttURL;
+            currentExternalTrack.default = true;
+
+            videoPlayer.appendChild(currentExternalTrack);
+
+            // Disable existing internal/embedded tracks
+            for (let i = 0; i < videoPlayer.textTracks.length; i++) {
+                videoPlayer.textTracks[i].mode = 'disabled';
+            }
+
+            // Activate our newly generated track
+            setTimeout(() => {
+                const tracks = videoPlayer.textTracks;
+                for (let i = 0; i < tracks.length; i++) {
+                    if (tracks[i].label.startsWith('External Subtitles')) {
+                        tracks[i].mode = 'showing';
+                    }
+                }
+            }, 50);
+        }
+
+        // Helper function to convert SRT string to WebVTT format and insert vertical positioning variables
+        function convertSrtToVtt(srtText, verticalPositionPercent) {
+            let vtt = "WEBVTT\n\n";
+            let formattedText = srtText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+            // Regex to find SRT timestamps (e.g., 00:00:01,000 --> 00:00:04,210)
+            const timestampLineRegex = /(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})/g;
+
+            // WebVTT expects dot delimiters instead of commas. We also append the positioning line parameter.
+            formattedText = formattedText.replace(timestampLineRegex, (match, sh, sm, eh, em) => {
+                const startTime = `${sh}.${sm}`;
+                const endTime = `${eh}.${em}`;
+                return `${startTime} --> ${endTime} line:${verticalPositionPercent}%`;
+            });
+
+            vtt += formattedText;
+            return vtt;
+        }
+
+        // Helper to clear current active subtitles
+        function clearSubtitleTrack() {
+            if (currentExternalTrack) {
+                currentExternalTrack.remove();
+                currentExternalTrack = null;
+            }
+            // Remove any object URLs to prevent memory leaks
+            const tracks = videoPlayer.querySelectorAll('track');
+            tracks.forEach(track => track.remove());
+        }
+
+        // Clear All Functionality
+        function clearAll() {
+            // Stop video and reset source
+            videoPlayer.pause();
+            videoPlayer.removeAttribute('src');
+            videoPlayer.load();
+            playerWrapper.style.display = 'none';
+
+            // Reset File system track buffers
+            videoFile = null;
+            srtFile = null;
+            rawSrtText = "";
+            clearSubtitleTrack();
+
+            // Reset inputs & text indicators
+            videoInput.value = "";
+            srtInput.value = "";
+            videoStatus.textContent = "No video selected";
+            srtStatus.textContent = "No external subtitle file selected";
+        }
+
+        clearBtn.addEventListener('click', clearAll);
+
+        // Settings persistent loading
+        function loadSettings() {
+            const savedSize = localStorage.getItem('player-font-size');
+            if (savedSize) {
+                fontSizeSlider.value = savedSize;
+                fontSizeValue.textContent = `${savedSize}rem`;
+                document.documentElement.style.setProperty('--subtitle-font-size', `${savedSize}rem`);
+            } else {
+                document.documentElement.style.setProperty('--subtitle-font-size', '1.2rem');
+            }
+
+            const savedPosition = localStorage.getItem('player-vtt-position');
+            if (savedPosition) {
+                positionSlider.value = savedPosition;
+                positionValue.textContent = `${savedPosition}%`;
+            }
+        }
+
+        // Control Sliders Custom Events
+        fontSizeSlider.addEventListener('input', (e) => {
+            const val = e.target.value;
+            fontSizeValue.textContent = `${val}rem`;
+            document.documentElement.style.setProperty('--subtitle-font-size', `${val}rem`);
+            localStorage.setItem('player-font-size', val);
+        });
+
+        positionSlider.addEventListener('input', (e) => {
+            const val = e.target.value;
+            positionValue.textContent = `${val}%`;
+            localStorage.setItem('player-vtt-position', val);
+            // Reparse the active subtitle dynamically with the new line offset positioning
+            if (rawSrtText) {
+                applySubtitles();
+            }
+        });
+
+        // Keyboard Hotkeys using EVENT CAPTURING
+        // Modern option syntax `{ capture: true }` passes the listener to the early capture phase.
+        window.addEventListener('keydown', (e) => {
+            const active = document.activeElement;
+
+            // Allow hotkeys even if a slider is focused, but block them if the user is
+            // focused on standard buttons or other text/file inputs.
+            if (active && (active.tagName === 'BUTTON' || (active.tagName === 'INPUT' && active.type !== 'range'))) {
+                return;
+            }
+
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (videoPlayer.src) {
+                    if (videoPlayer.paused) {
+                        videoPlayer.play();
+                    } else {
+                        videoPlayer.pause();
+                    }
+                }
+            } else if (e.code === 'ArrowUp') {
+                e.preventDefault();
+                if (videoPlayer.src) {
+                    videoPlayer.muted = false;
+                    videoPlayer.volume = Math.min(1.0, videoPlayer.volume + 0.05);
+                }
+            } else if (e.code === 'ArrowDown') {
+                e.preventDefault();
+                if (videoPlayer.src) {
+                    videoPlayer.volume = Math.max(0.0, videoPlayer.volume - 0.05);
+                }
+            } else if (e.code === 'KeyF') {
+                e.preventDefault();
+                if (videoPlayer.src) {
+                    if (!document.fullscreenElement) {
+                        videoPlayer.requestFullscreen().catch(err => {
+                            console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+                        });
+                    } else {
+                        document.exitFullscreen();
+                    }
+                }
+            }
+        }, { capture: true });
+    </script>
+</body>
+</html>
