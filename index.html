@@ -319,7 +319,7 @@
         <div class="config-item">
           <label for="position-slider">Vertical Position</label>
           <div class="slider-container">
-            <input type="range" id="position-slider" min="10" max="95" step="5" value="85">
+            <input type="range" id="position-slider" min="0" max="100" step="5" value="85">
             <span class="config-value" id="position-value">85%</span>
           </div>
         </div>
@@ -548,6 +548,22 @@
       }
       if (!activeFound) {
         subtitleSelector.value = 'disabled';
+      }
+
+      // Apply initial vertical position to track cues
+      updateTracksPosition(positionSlider.value);
+    }
+
+    // Helper to dynamically update the line attribute for track cues
+    function updateTracksPosition(percent) {
+      for (let i = 0; i < videoPlayer.textTracks.length; i++) {
+        const track = videoPlayer.textTracks[i];
+        if (track.cues) {
+          for (let j = 0; j < track.cues.length; j++) {
+            track.cues[j].line = Number(percent);
+            track.cues[j].snapToLines = false;
+          }
+        }
       }
     }
 
@@ -778,7 +794,11 @@
       const val = e.target.value;
       positionValue.textContent = `${val}%`;
       localStorage.setItem('player-vtt-position', val);
-      // Reparse the active subtitle dynamically with the new line offset positioning
+
+      // Dynamically update position for all text tracks (including embedded)
+      updateTracksPosition(val);
+
+      // Reparse external SRT subtitles if active
       if (rawSrtText) {
         applySubtitles();
       }
