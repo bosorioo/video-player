@@ -5,6 +5,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Local Video Player with Subtitles</title>
+
+  <!-- Enable Cross-Origin Isolation (COOP/COEP) for SharedArrayBuffer support on GitHub Pages -->
+  <script src="https://cdn.jsdelivr.net/npm/coi-serviceworker@0.1.7/coi-serviceworker.min.js"></script>
+  <script type="module">
+    import * as ffmpegutil from 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm';
+    window.ffmpegutil = ffmpegutil;
+  </script>
+
   <style>
     :root {
       --bg-color: #0f172a;
@@ -153,6 +161,21 @@
       font-weight: 600;
     }
 
+    .config-item select {
+      background: var(--bg-color);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 0.85rem;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .config-item select:focus {
+      border-color: var(--accent-color);
+    }
+
     /* Fixed Alignment for Slider and Value elements */
     .slider-container {
       display: flex;
@@ -230,6 +253,9 @@
       line-height: 1.4;
     }
   </style>
+
+  <!-- Import FFmpeg WASM library -->
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 </head>
 
 <body tabindex="1">
@@ -237,13 +263,14 @@
   <div class="container">
     <header>
       <h1>Local Video Player</h1>
-      <p>Drag and drop browser-compatible files to play offline.</p>
+      <p>Drag and drop browser-compatible files or MKVs to play offline.</p>
       <p style="font-size: 0.85rem; margin-top: 6px; color: var(--accent-color)">
         Hotkeys:
         <br />
         <strong>Space</strong> (Play/Pause) <strong>｜</strong> <strong>F</strong> (Fullscreen)
         <br />
-        <strong>&uparrow; / &downarrow; Arrows</strong> (Volume) <strong>｜</strong> <strong>&leftarrow; / &rightarrow; Arrows</strong> (move backwards/forwards)
+        <strong>&uparrow; / &downarrow; Arrows</strong> (Volume) <strong>｜</strong> <strong>&leftarrow; / &rightarrow;
+          Arrows</strong> (move backwards/forwards)
       </p>
     </header>
 
@@ -252,9 +279,10 @@
       <div class="drop-zone" id="video-drop-zone">
         <span style="font-size: 2.5rem;">🎬</span>
         <p><strong>Choose a Video</strong> or drag it here</p>
-        <p style="font-size: 0.8rem; margin-top: 4px;">Supports MP4, WebM, OGG, OGV</p>
+        <p style="font-size: 0.8rem; margin-top: 4px;">Supports MP4, WebM, OGG, OGV, MKV</p>
         <div class="file-status" id="video-status">No video selected</div>
-        <input type="file" id="video-input" class="file-input" accept="video/mp4, video/webm, video/ogg">
+        <input type="file" id="video-input" class="file-input"
+          accept="video/mp4, video/webm, video/ogg, .mkv, video/x-matroska">
       </div>
 
       <!-- Subtitle Upload -->
@@ -270,6 +298,14 @@
     <!-- Configuration & Global Action Controls -->
     <div class="controls-panel">
       <div class="config-group">
+        <!-- Subtitle Track Selector -->
+        <div class="config-item">
+          <label for="subtitle-selector">Subtitle Track</label>
+          <select id="subtitle-selector">
+            <option value="disabled">Disabled</option>
+          </select>
+        </div>
+
         <!-- Font Size Configuration -->
         <div class="config-item">
           <label for="font-size-slider">Font Size</label>
@@ -301,6 +337,9 @@
   </div>
 
   <script>
+    const { createFFmpeg, fetchFile } = FFmpeg;
+    let ffmpeg = null;
+
     const videoInput = document.getElementById('video-input');
     const videoDropZone = document.getElementById('video-drop-zone');
     const videoStatus = document.getElementById('video-status');
@@ -312,6 +351,7 @@
     const videoPlayer = document.getElementById('video-player');
     const playerWrapper = document.getElementById('player-wrapper');
     const clearBtn = document.getElementById('clear-btn');
+    const subtitleSelector = document.getElementById('subtitle-selector');
 
     // Config Elements
     const fontSizeSlider = document.getElementById('font-size-slider');
@@ -363,33 +403,226 @@
       });
     }
 
+    // Initialize FFmpeg WASM instance
+    async function getFFmpeg() {
+      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
+
+      if (!ffmpeg) {
+        ffmpeg = createFFmpeg({ log: true });
+      }
+      if (!ffmpeg.isLoaded()) {
+        videoStatus.textContent = "Loading FFmpeg engine...";
+        await ffmpeg.load({
+          coreURL: await ffmpegutil.toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await ffmpegutil.toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+          workerURL: await ffmpegutil.toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+        });
+      }
+      return ffmpeg;
+    }
+
+    // Transcode MKV file into native MP4 container with browser-compatible AAC audio
+    async function transcodeMkvToMp4(file) {
+      const ffmpegInstance = await getFFmpeg();
+      const trackNames = [];
+
+      ffmpegInstance.setProgress(({ ratio }) => {
+        if (ratio >= 0 && ratio <= 1) {
+          videoStatus.textContent = `Transcoding MKV... ${Math.round(ratio * 100)}%`;
+        }
+      });
+
+      ffmpegInstance.setLogger(({ type, message }) => {
+        // console.log(message);
+
+        // Regex to match subtitle stream metadata lines, e.g.:
+        // "Stream #0:2(eng): Subtitle: subrip (default)"
+        // "title : English (SDH)"
+        const streamMatch = message.match(/Stream #0:(\d+)(?:\(([a-z]{3})\))?: Subtitle/i);
+        if (streamMatch) {
+          const streamIdx = streamMatch[1];
+          const lang = streamMatch[2] || 'unknown';
+          trackNames.push({
+            index: streamIdx,
+            label: `Track ${streamIdx} (${lang})`,
+            hasMatchedTitle: false,
+            lang
+          });
+        }
+
+        // Capture explicit title tags if FFmpeg prints them right after stream info
+        const titleMatch = /\s+title\s+:\s+(.+)/i.exec(message);
+        const lastTrack = trackNames[trackNames.length - 1];
+        if (titleMatch && lastTrack && !lastTrack.hasMatchedTitle) {
+          // Assign custom title to the most recently detected stream
+          lastTrack.hasMatchedTitle = true;
+          lastTrack.label = titleMatch[1].trim();
+        }
+      });
+
+      videoStatus.textContent = "Preparing MKV for processing...";
+      ffmpegInstance.FS('writeFile', 'input.mkv', await fetchFile(file));
+
+      // Stream copy video, convert audio to AAC, and include soft subtitles
+      await ffmpegInstance.run(
+        '-i', 'input.mkv',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-c:s', 'mov_text',
+        '-strict', '-2',
+        '-movflags', '+faststart',
+        'output.mp4'
+      );
+
+      const data = ffmpegInstance.FS('readFile', 'output.mp4');
+
+      ffmpegInstance.setLogger(() => { });
+      ffmpegInstance.setProgress(() => { });
+
+      videoStatus.textContent = `Checking embedded subtitles...`;
+
+      const extractedSubtitles = [];
+      for (let index = 0; index < 5; index++) {
+        const subFilename = `sub_${index}.vtt`;
+        try {
+          // Try extracting subtitle stream by index
+          await ffmpegInstance.run(
+            '-i', 'input.mkv',
+            '-map', `0:s:${index}`,
+            subFilename
+          );
+
+          const subData = ffmpegInstance.FS('readFile', subFilename);
+          const subBlob = new Blob([subData.buffer], { type: 'text/vtt' });
+          const trackNameData = trackNames[index];
+          extractedSubtitles.push({
+            index: index + 1,
+            blob: subBlob,
+            label: [
+              trackNameData.lang ? `[${trackNameData.lang}]` : '',
+              trackNameData?.label ?? 'Track #' + (index + 1)
+            ].filter(v => v).join(' ')
+          });
+
+          ffmpegInstance.FS('unlink', subFilename);
+        } catch (e) {
+          // Reached the end of available subtitle streams in the file
+          break;
+        }
+      }
+
+      // Cleanup WASM virtual file system memory
+      ffmpegInstance.FS('unlink', 'input.mkv');
+      ffmpegInstance.FS('unlink', 'output.mp4');
+
+      return { videoBlob: new Blob([data.buffer], { type: 'video/mp4' }), extractedSubtitles };
+    }
+
+    // Populate and rebuild subtitle tracks dropdown menu
+    function refreshSubtitleSelector() {
+      const selectedValue = subtitleSelector.value;
+      subtitleSelector.innerHTML = '<option value="disabled">Disabled</option>';
+
+      for (let i = 0; i < videoPlayer.textTracks.length; i++) {
+        const track = videoPlayer.textTracks[i];
+        const option = document.createElement('option');
+        option.value = i;
+
+        let label = track.label || (track.language ? `Track ${i + 1} (${track.language.toUpperCase()})` : `Track ${i + 1}`);
+        if (track.kind) {
+          label += ` [${track.kind}]`;
+        }
+
+        option.textContent = label;
+        subtitleSelector.appendChild(option);
+      }
+
+      // Preserve selection state or set active track
+      let activeFound = false;
+      for (let i = 0; i < videoPlayer.textTracks.length; i++) {
+        if (videoPlayer.textTracks[i].mode === 'showing') {
+          subtitleSelector.value = i;
+          activeFound = true;
+          break;
+        }
+      }
+      if (!activeFound) {
+        subtitleSelector.value = 'disabled';
+      }
+    }
+
+    // Switch active subtitle track based on select dropdown value
+    subtitleSelector.addEventListener('change', (e) => {
+      const val = e.target.value;
+      for (let i = 0; i < videoPlayer.textTracks.length; i++) {
+        if (val === 'disabled') {
+          videoPlayer.textTracks[i].mode = 'disabled';
+        } else {
+          videoPlayer.textTracks[i].mode = (i === parseInt(val, 10)) ? 'showing' : 'disabled';
+        }
+      }
+    });
+
     // Handle Video Selection
-    function handleVideoSelect(file) {
+    async function handleVideoSelect(file) {
       const fileExtension = file.name.split('.').pop().toLowerCase();
       const isBrowserCompatible = allowedVideoMimes.includes(file.type) || allowedVideoExtensions.includes(fileExtension);
+      const isMkv = fileExtension === 'mkv';
 
-      if (!isBrowserCompatible) {
-        alert('Please select a compatible browser video format (.mp4, .webm, or .ogg / .ogv).');
+      if (!isBrowserCompatible && !isMkv) {
+        alert('Please select a supported video format (.mp4, .webm, .ogg, or .mkv).');
         videoInput.value = "";
         return;
       }
 
       videoFile = file;
-      videoStatus.textContent = file.name;
+
+      let playableBlobURL;
+      let tracksToAdd = [];
+      if (isMkv) {
+        try {
+          const { videoBlob: mp4Blob, extractedSubtitles } = await transcodeMkvToMp4(file);
+          playableBlobURL = URL.createObjectURL(mp4Blob);
+          videoStatus.textContent = `${file.name} (Transcoded to MP4)`;
+          console.log(extractedSubtitles);
+          if (extractedSubtitles.length > 0) {
+            extractedSubtitles.forEach((sub) => {
+              const track = document.createElement('track');
+              track.kind = 'subtitles';
+              track.label = sub.label ?? `Embedded Subtitle #${sub.index}`;
+              track.srclang = `sub${sub.index}`;
+              track.src = URL.createObjectURL(sub.blob);
+              tracksToAdd.push(track);
+            });
+          }
+        } catch (error) {
+          console.error(error);
+          alert('Failed to transcode MKV file.');
+          videoStatus.textContent = "Transcoding failed";
+          return;
+        }
+      } else {
+        playableBlobURL = URL.createObjectURL(file);
+        videoStatus.textContent = file.name;
+      }
 
       // Clear any old track element
       clearSubtitleTrack();
 
       // Create object URL and load video
-      const videoURL = URL.createObjectURL(file);
-      videoPlayer.src = videoURL;
+      videoPlayer.src = playableBlobURL;
       playerWrapper.style.display = 'block';
       videoPlayer.load();
 
-      // Handle embedded track defaults
+      // Handle embedded track discovery
       videoPlayer.onloadedmetadata = () => {
+        for (const trackToAdd of tracksToAdd) {
+          videoPlayer.appendChild(trackToAdd);
+        }
+        refreshSubtitleSelector();
         if (videoPlayer.textTracks && videoPlayer.textTracks.length > 0 && !currentExternalTrack) {
           videoPlayer.textTracks[0].mode = 'showing';
+          subtitleSelector.value = 0;
         }
       };
     }
@@ -424,20 +657,23 @@
       const position = positionSlider.value;
       const vttText = convertSrtToVtt(rawSrtText, position);
 
-      // Clear any previous subtitles
-      clearSubtitleTrack();
-
       // Create a blob URL for the converted VTT data
       const vttBlob = new Blob([vttText], { type: 'text/vtt' });
       const vttURL = URL.createObjectURL(vttBlob);
 
+      if (currentExternalTrack) {
+        currentExternalTrack.remove();
+        currentExternalTrack = null;
+      }
+
       // Create and append track element
       currentExternalTrack = document.createElement('track');
       currentExternalTrack.kind = 'subtitles';
-      currentExternalTrack.label = 'External Subtitles (' + (srtFile ? srtFile.name : 'Loaded') + ')';
+      currentExternalTrack.label = 'External: ' + (srtFile ? srtFile.name : 'Loaded');
       currentExternalTrack.srclang = 'ext';
       currentExternalTrack.src = vttURL;
       currentExternalTrack.default = true;
+      currentExternalTrack.isLoadedSrt = true;
 
       videoPlayer.appendChild(currentExternalTrack);
 
@@ -446,14 +682,15 @@
         videoPlayer.textTracks[i].mode = 'disabled';
       }
 
-      // Activate our newly generated track
+      // Activate our newly generated track and refresh selector options
       setTimeout(() => {
         const tracks = videoPlayer.textTracks;
         for (let i = 0; i < tracks.length; i++) {
-          if (tracks[i].label.startsWith('External Subtitles')) {
+          if (tracks[i].label.startsWith('External:')) {
             tracks[i].mode = 'showing';
           }
         }
+        refreshSubtitleSelector();
       }, 50);
     }
 
@@ -482,9 +719,9 @@
         currentExternalTrack.remove();
         currentExternalTrack = null;
       }
-      // Remove any object URLs to prevent memory leaks
-      const tracks = videoPlayer.querySelectorAll('track');
-      tracks.forEach(track => track.remove());
+      const externalTracks = videoPlayer.querySelectorAll('track');
+      externalTracks.forEach(track => track.remove());
+      refreshSubtitleSelector();
     }
 
     // Clear All Functionality
@@ -506,6 +743,7 @@
       srtInput.value = "";
       videoStatus.textContent = "No video selected";
       srtStatus.textContent = "No external subtitle file selected";
+      subtitleSelector.innerHTML = '<option value="disabled">Disabled</option>';
     }
 
     clearBtn.addEventListener('click', clearAll);
@@ -547,13 +785,10 @@
     });
 
     // Keyboard Hotkeys using EVENT CAPTURING
-    // Modern option syntax `{ capture: true }` passes the listener to the early capture phase.
     const onGlobalKeydown = (e) => {
       const active = document.activeElement;
 
-      // Allow hotkeys even if a slider is focused, but block them if the user is
-      // focused on standard buttons or other text/file inputs.
-      if (active && (active.tagName === 'BUTTON' || (active.tagName === 'INPUT' && active.type !== 'range'))) {
+      if (active && ((active.tagName === 'INPUT' && active.type !== 'range'))) {
         return;
       }
 
